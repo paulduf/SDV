@@ -1,4 +1,7 @@
 """Wrapper around CTGAN model."""
+
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 from ctgan import CTGAN, TVAE
@@ -19,7 +22,9 @@ def _validate_no_category_dtype(data):
         - ``InvalidDataTypeError`` if any columns in the data have 'category' dtype.
     """
     category_cols = [
-        col for col, dtype in data.dtypes.items() if pd.api.types.is_categorical_dtype(dtype)
+        col
+        for col, dtype in data.dtypes.items()
+        if pd.api.types.is_categorical_dtype(dtype)
     ]
     if category_cols:
         categoricals = "', '".join(category_cols)
@@ -44,7 +49,9 @@ class LossValuesMixin:
                 Dataframe containing the loss values per epoch.
         """
         if not self._fitted:
-            err_msg = 'Loss values are not available yet. Please fit your synthesizer first.'
+            err_msg = (
+                "Loss values are not available yet. Please fit your synthesizer first."
+            )
             raise NotFittedError(err_msg)
 
         return self._model.loss_values.copy()
@@ -102,22 +109,34 @@ class CTGANSynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
             If ``False``, do not use cuda at all.
     """
 
-    _model_sdtype_transformers = {
-        'categorical': None,
-        'boolean': None
-    }
+    _model_sdtype_transformers = {"categorical": None, "boolean": None}
 
-    def __init__(self, metadata, enforce_min_max_values=True, enforce_rounding=True, locales=None,
-                 embedding_dim=128, generator_dim=(256, 256), discriminator_dim=(256, 256),
-                 generator_lr=2e-4, generator_decay=1e-6, discriminator_lr=2e-4,
-                 discriminator_decay=1e-6, batch_size=500, discriminator_steps=1,
-                 log_frequency=True, verbose=False, epochs=300, pac=10, cuda=True):
-
+    def __init__(
+        self,
+        metadata,
+        enforce_min_max_values=True,
+        enforce_rounding=True,
+        locales=None,
+        embedding_dim=128,
+        generator_dim=(256, 256),
+        discriminator_dim=(256, 256),
+        generator_lr=2e-4,
+        generator_decay=1e-6,
+        discriminator_lr=2e-4,
+        discriminator_decay=1e-6,
+        batch_size=500,
+        discriminator_steps=1,
+        log_frequency=True,
+        verbose=False,
+        epochs=300,
+        pac=10,
+        cuda=True,
+    ):
         super().__init__(
             metadata=metadata,
             enforce_min_max_values=enforce_min_max_values,
             enforce_rounding=enforce_rounding,
-            locales=locales
+            locales=locales,
         )
 
         self.embedding_dim = embedding_dim
@@ -136,20 +155,20 @@ class CTGANSynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
         self.cuda = cuda
 
         self._model_kwargs = {
-            'embedding_dim': embedding_dim,
-            'generator_dim': generator_dim,
-            'discriminator_dim': discriminator_dim,
-            'generator_lr': generator_lr,
-            'generator_decay': generator_decay,
-            'discriminator_lr': discriminator_lr,
-            'discriminator_decay': discriminator_decay,
-            'batch_size': batch_size,
-            'discriminator_steps': discriminator_steps,
-            'log_frequency': log_frequency,
-            'verbose': verbose,
-            'epochs': epochs,
-            'pac': pac,
-            'cuda': cuda
+            "embedding_dim": embedding_dim,
+            "generator_dim": generator_dim,
+            "discriminator_dim": discriminator_dim,
+            "generator_lr": generator_lr,
+            "generator_decay": generator_decay,
+            "discriminator_lr": discriminator_lr,
+            "discriminator_decay": discriminator_decay,
+            "batch_size": batch_size,
+            "discriminator_steps": discriminator_steps,
+            "log_frequency": log_frequency,
+            "verbose": verbose,
+            "epochs": epochs,
+            "pac": pac,
+            "cuda": cuda,
         }
 
     def _estimate_num_columns(self, data):
@@ -173,10 +192,138 @@ class CTGANSynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
             if column not in sdtypes:
                 continue
 
-            if sdtypes[column] in {'numerical', 'datetime'}:
+            if sdtypes[column] in {"numerical", "datetime"}:
                 num_generated_columns[column] = 11
 
-            elif sdtypes[column] in {'categorical', 'boolean'}:
+            elif sdtypes[column] in {"categorical", "boolean"}:
+                if transformers[column] is None:
+                    num_categories = data[column].fillna(np.nan).nunique(dropna=False)
+                    num_generated_columns[column] = num_categories
+                else:
+                    num_generated_columns[column] = 11
+
+        return num_generated_columns
+
+    def _print_warning(self, data):
+        """Print a warning if the number of columns generated is over 1000."""
+        dict_generated_columns = self._estimate_num_columns(data)
+        if sum(dict_generated_columns.values()) > 1000:
+            header = {"Original Column Name  ": "Est # of Columns (CTGAN)"}
+            dict_generated_columns = {**header, **dict_generated_columns}
+            longest_column_name = len(max(dict_generated_columns, key=len))
+            cap = "<" + str(longest_column_name)
+            lines_to_print = []
+            for column, num_generated_columns in dict_generated_columns.items():
+                lines_to_print.append(f"{column:{cap}} {num_generated_columns}")
+
+            generated_columns_str = "\n".join(lines_to_print)
+            print(  # noqa: T001
+                "PerformanceAlert: Using the CTGANSynthesizer on this data is not recommended. "
+                "To model this data, CTGAN will generate a large number of columns."
+                "\n\n"
+                f"{generated_columns_str}"
+                "\n\n"
+                "We recommend preprocessing discrete columns that can have many values, "
+                "using 'update_transformers'. Or you may drop columns that are not necessary "
+                "to model. (Exit this script using ctrl-C)"
+            )
+
+    def _preprocess(self, data):
+        self.validate(data)
+        self._data_processor.fit(data)
+        self._print_warning(data)
+
+        return self._data_processor.transform(data)
+
+    def _estimate_num_columns(self, data):
+        """Estimate the number of columns that the data will generate.
+
+        Estimates that continuous columns generate 11 columns and categorical ones
+        create n where n is the number of unique categories.
+
+        Args:
+            data (pandas.DataFrame):
+                Data to estimate the number of columns from.
+
+        Returns:
+            int:
+                Number of estimate columns.
+        """
+        sdtypes = self._data_processor.get_sdtypes()
+        transformers = self.get_transformers()
+        num_generated_columns = {}
+        for column in data.columns:
+            if column not in sdtypes:
+                continue
+
+            if sdtypes[column] in {"numerical", "datetime"}:
+                num_generated_columns[column] = 11
+
+            elif sdtypes[column] in {"categorical", "boolean"}:
+                if transformers[column] is None:
+                    num_categories = data[column].fillna(np.nan).nunique(dropna=False)
+                    num_generated_columns[column] = num_categories
+                else:
+                    num_generated_columns[column] = 11
+
+        return num_generated_columns
+
+    def _print_warning(self, data):
+        """Print a warning if the number of columns generated is over 1000."""
+        dict_generated_columns = self._estimate_num_columns(data)
+        if sum(dict_generated_columns.values()) > 1000:
+            header = {"Original Column Name  ": "Est # of Columns (CTGAN)"}
+            dict_generated_columns = {**header, **dict_generated_columns}
+            longest_column_name = len(max(dict_generated_columns, key=len))
+            cap = "<" + str(longest_column_name)
+            lines_to_print = []
+            for column, num_generated_columns in dict_generated_columns.items():
+                lines_to_print.append(f"{column:{cap}} {num_generated_columns}")
+
+            generated_columns_str = "\n".join(lines_to_print)
+            print(  # noqa: T001
+                "PerformanceAlert: Using the CTGANSynthesizer on this data is not recommended. "
+                "To model this data, CTGAN will generate a large number of columns."
+                "\n\n"
+                f"{generated_columns_str}"
+                "\n\n"
+                "We recommend preprocessing discrete columns that can have many values, "
+                "using 'update_transformers'. Or you may drop columns that are not necessary "
+                "to model. (Exit this script using ctrl-C)"
+            )
+
+    def _preprocess(self, data):
+        self.validate(data)
+        self._data_processor.fit(data)
+        self._print_warning(data)
+
+        return self._data_processor.transform(data)
+
+    def _estimate_num_columns(self, data):
+        """Estimate the number of columns that the data will generate.
+
+        Estimates that continuous columns generate 11 columns and categorical ones
+        create n where n is the number of unique categories.
+
+        Args:
+            data (pandas.DataFrame):
+                Data to estimate the number of columns from.
+
+        Returns:
+            int:
+                Number of estimate columns.
+        """
+        sdtypes = self._data_processor.get_sdtypes()
+        transformers = self.get_transformers()
+        num_generated_columns = {}
+        for column in data.columns:
+            if column not in sdtypes:
+                continue
+
+            if sdtypes[column] in {"numerical", "datetime"}:
+                num_generated_columns[column] = 11
+
+            elif sdtypes[column] in {"categorical", "boolean"}:
                 if transformers.get(column) is None:
                     num_categories = data[column].fillna(np.nan).nunique(dropna=False)
                     num_generated_columns[column] = num_categories
@@ -189,24 +336,24 @@ class CTGANSynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
         """Print a warning if the number of columns generated is over 1000."""
         dict_generated_columns = self._estimate_num_columns(data)
         if sum(dict_generated_columns.values()) > 1000:
-            header = {'Original Column Name  ': 'Est # of Columns (CTGAN)'}
+            header = {"Original Column Name  ": "Est # of Columns (CTGAN)"}
             dict_generated_columns = {**header, **dict_generated_columns}
             longest_column_name = len(max(dict_generated_columns, key=len))
-            cap = '<' + str(longest_column_name)
+            cap = "<" + str(longest_column_name)
             lines_to_print = []
             for column, num_generated_columns in dict_generated_columns.items():
-                lines_to_print.append(f'{column:{cap}} {num_generated_columns}')
+                lines_to_print.append(f"{column:{cap}} {num_generated_columns}")
 
-            generated_columns_str = '\n'.join(lines_to_print)
+            generated_columns_str = "\n".join(lines_to_print)
             print(  # noqa: T001
-                'PerformanceAlert: Using the CTGANSynthesizer on this data is not recommended. '
-                'To model this data, CTGAN will generate a large number of columns.'
-                '\n\n'
-                f'{generated_columns_str}'
-                '\n\n'
-                'We recommend preprocessing discrete columns that can have many values, '
+                "PerformanceAlert: Using the CTGANSynthesizer on this data is not recommended. "
+                "To model this data, CTGAN will generate a large number of columns."
+                "\n\n"
+                f"{generated_columns_str}"
+                "\n\n"
+                "We recommend preprocessing discrete columns that can have many values, "
                 "using 'update_transformers'. Or you may drop columns that are not necessary "
-                'to model. (Exit this script using ctrl-C)'
+                "to model. (Exit this script using ctrl-C)"
             )
 
     def _preprocess(self, data):
@@ -227,9 +374,7 @@ class CTGANSynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
 
         transformers = self._data_processor._hyper_transformer.field_transformers
         discrete_columns = detect_discrete_columns(
-            self.get_metadata(),
-            processed_data,
-            transformers
+            self.get_metadata(), processed_data, transformers
         )
         self._model = CTGAN(**self._model_kwargs)
         self._model.fit(processed_data, discrete_columns=discrete_columns)
@@ -252,7 +397,9 @@ class CTGANSynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
         if conditions is None:
             return self._model.sample(num_rows)
 
-        raise NotImplementedError("CTGANSynthesizer doesn't support conditional sampling.")
+        raise NotImplementedError(
+            "CTGANSynthesizer doesn't support conditional sampling."
+        )
 
 
 class TVAESynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
@@ -287,39 +434,43 @@ class TVAESynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
             If ``False``, do not use cuda at all.
     """
 
-    _model_sdtype_transformers = {
-        'categorical': None,
-        'boolean': None
-    }
+    _model_sdtype_transformers = {"categorical": None, "boolean": None}
 
-    def __init__(self, metadata, enforce_min_max_values=True, enforce_rounding=True,
-                 embedding_dim=128, compress_dims=(128, 128), decompress_dims=(128, 128),
-                 l2scale=1e-5, batch_size=500, epochs=300, loss_factor=2, cuda=True):
-
+    def __init__(
+        self,
+        metadata,
+        enforce_min_max_values=True,
+        enforce_rounding=True,
+        model_kwargs: Optional[dict] = None,
+    ):
         super().__init__(
             metadata=metadata,
             enforce_min_max_values=enforce_min_max_values,
             enforce_rounding=enforce_rounding,
         )
-        self.embedding_dim = embedding_dim
-        self.compress_dims = compress_dims
-        self.decompress_dims = decompress_dims
-        self.l2scale = l2scale
-        self.batch_size = batch_size
-        self.epochs = epochs
-        self.loss_factor = loss_factor
-        self.cuda = cuda
 
-        self._model_kwargs = {
-            'embedding_dim': embedding_dim,
-            'compress_dims': compress_dims,
-            'decompress_dims': decompress_dims,
-            'l2scale': l2scale,
-            'batch_size': batch_size,
-            'epochs': epochs,
-            'loss_factor': loss_factor,
-            'cuda': cuda
-        }
+        self._model_kwargs = model_kwargs
+
+        assert all(
+            [
+                k
+                in [
+                    "embedding_dim",
+                    "compress_dims",
+                    "decompress_dims",
+                    "l2scale",
+                    "batch_size",
+                    "epochs",
+                    "loss_factor",
+                    "cuda",
+                    "alpha",
+                    "lbd",
+                    "encoder_bn",
+                    "decoder_bn",
+                ]
+                for k in self._model_kwargs.keys()
+            ]
+        )
 
     def _fit(self, processed_data):
         """Fit the model to the table.
@@ -332,9 +483,7 @@ class TVAESynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
 
         transformers = self._data_processor._hyper_transformer.field_transformers
         discrete_columns = detect_discrete_columns(
-            self.get_metadata(),
-            processed_data,
-            transformers
+            self.get_metadata(), processed_data, transformers
         )
         self._model = TVAE(**self._model_kwargs)
         self._model.fit(processed_data, discrete_columns=discrete_columns)
@@ -357,4 +506,6 @@ class TVAESynthesizer(LossValuesMixin, BaseSingleTableSynthesizer):
         if conditions is None:
             return self._model.sample(num_rows)
 
-        raise NotImplementedError("TVAESynthesizer doesn't support conditional sampling.")
+        raise NotImplementedError(
+            "TVAESynthesizer doesn't support conditional sampling."
+        )
