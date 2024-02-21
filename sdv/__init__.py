@@ -4,9 +4,9 @@
 
 """Top-level package for SDV."""
 
-__author__ = 'DataCebo, Inc.'
-__email__ = 'info@sdv.dev'
-__version__ = '1.10.1.dev0'
+__author__ = "DataCebo, Inc."
+__email__ = "info@sdv.dev"
+__version__ = "1.10.2.dev"
 
 
 import sys
@@ -16,22 +16,33 @@ from operator import attrgetter
 from pkg_resources import iter_entry_points
 
 from sdv import (
-    constraints, data_processing, datasets, evaluation, lite, metadata, metrics, multi_table,
-    sampling, sequential, single_table, version)
+    constraints,
+    data_processing,
+    datasets,
+    evaluation,
+    lite,
+    metadata,
+    metrics,
+    multi_table,
+    sampling,
+    sequential,
+    single_table,
+    version,
+)
 
 __all__ = [
-    'constraints',
-    'data_processing',
-    'datasets',
-    'evaluation',
-    'lite',
-    'metadata',
-    'metrics',
-    'multi_table',
-    'sampling',
-    'sequential',
-    'single_table',
-    'version'
+    "constraints",
+    "data_processing",
+    "datasets",
+    "evaluation",
+    "lite",
+    "metadata",
+    "metrics",
+    "multi_table",
+    "sampling",
+    "sequential",
+    "single_table",
+    "version",
 ]
 
 
@@ -50,8 +61,8 @@ def _get_addon_target(addon_path_name):
             * str:
                 The name the add-on should be added to under the module or object.
     """
-    module_path, _, object_path = addon_path_name.partition(':')
-    module_path = module_path.split('.')
+    module_path, _, object_path = addon_path_name.partition(":")
+    module_path = module_path.split(".")
 
     if module_path[0] != __name__:
         msg = f"expected base module to be '{__name__}', found '{module_path[0]}'"
@@ -70,23 +81,25 @@ def _get_addon_target(addon_path_name):
         if len(module_path) > 1:
             target_base = getattr(target_base, module_path[-1])
 
-        split_object = object_path.split('.')
+        split_object = object_path.split(".")
         addon_name = split_object[-1]
 
         if len(split_object) > 1:
-            target_base = attrgetter('.'.join(split_object[:-1]))(target_base)
+            target_base = attrgetter(".".join(split_object[:-1]))(target_base)
 
     return target_base, addon_name
 
 
 def _find_addons():
     """Find and load all sdv add-ons."""
-    group = 'sdv_modules'
+    group = "sdv_modules"
     for entry_point in iter_entry_points(group=group):
         try:
             addon = entry_point.load()
         except Exception:  # pylint: disable=broad-exception-caught
-            msg = f'Failed to load "{entry_point.name}" from "{entry_point.module_name}".'
+            msg = (
+                f'Failed to load "{entry_point.name}" from "{entry_point.module_name}".'
+            )
             warnings.warn(msg)
             continue
 
